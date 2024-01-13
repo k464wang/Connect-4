@@ -1,0 +1,365 @@
+#include <LiquidCrystal_I2C.h>
+#include <Wire.h>
+
+typedef struct
+{
+  unsigned long countTime;
+  long blinkInterval;
+  long lightUp;
+  long dropInterval;
+  int x;
+  int y;
+} Blink;
+
+int dataPin = 2;
+int latchPin = 3;
+int clockPin = 4;
+
+int dataPin2 = 7;
+int latchPin2 = 8;
+int clockPin2 = 12;
+LiquidCrystal_I2C lcd (0x27, 2, 1, 0, 4, 5, 6, 7, 3, POSITIVE);
+
+int buttonpin = 5;
+#define joyX A0
+#define joyY A1
+#define MoveRight 823
+#define MoveLeft 200
+#define P1 0
+#define P2 1
+
+void store();
+int** IsGameWon(int x, int y);
+void LightMatrixLed (int x, int y);
+void CloseMatrixLed (int x, int y);
+void displayMatrix ();
+void BlinkLights (Blink &token, unsigned long currentTime);
+void DropBlink(Blink &token, unsigned long currentTime);
+bool placeToken (Blink &token, unsigned long currentTime);
+bool MoveToken(int xpos, Blink &token);
+bool isOpen(int xpos, int ypos);
+bool isGameWon(int x, int y);
+void BlinkWin(Blink &token, unsigned long currentTime);
+
+byte blue[] = {0,0,0,0,0,0,0,0};
+byte red[] = {0, 0, 0, 0, 0, 0, 0, 0};
+byte green[] = {0, 0, 0, 0, 0, 0, 0, 0};
+int wonToken[4][2];
+
+Blink sToken;
+int xValue = 0;
+int yValue = 0;
+int buttonState = 0;
+bool isPlaced = true;
+bool isJoystick = false;
+bool GameWon = false;
+int turn = P1;
+
+long timeCounter = 0;
+
+bool isGameWon(int x, int y)
+{
+  byte *arr = turn == P1? blue : red;
+  /*for (int i = 0; i < 8; i++)
+  {
+    Serial.print(arr[i]);
+    Serial.print("\n");
+  }*/
+  int count = 0;
+  //Serial.print(x);
+  //Serial.print(y);
+  int hor = x - 3 < 0? 0 : (x - 3);
+  int ver = y - 3 < 0? 0 : (y - 3);
+  /*Serial.print("\n");
+  Serial.print(hor);
+  Serial.print(ver); 
+  Serial.print("\n");*/
+  for (int i = 0; hor + i < x + 4 && hor + i <= 7; i++)
+  {
+    if (bitRead(arr[y], 7 - (hor + i)))
+    {
+      //Serial.print(count);
+      wonToken[count][0] = y;
+      wonToken[count][1] = hor + i;
+      count++;
+    }
+    else
+      count = 0;
+      
+    if (count == 4)
+      return true;
+  }
+  count = 0;
+  
+    
+  for (int i = 0; ver + i < y + 4 && ver + i <= 7; i++)
+  {
+    if (bitRead(arr[ver + i],7 - x))
+    {
+      wonToken[count][0] = ver + i;
+      wonToken[count][1] = x;
+      count++;
+    }
+    else
+      count = 0;
+
+    if (count == 4)
+      return true;
+  }
+  count = 0;
+
+  
+  int mindiff = y - ver <= x - hor? y - ver: x - hor;
+  hor = x - mindiff;
+  ver = y - mindiff;
+  /*Serial.print("\n");
+  Serial.print(hor);
+  Serial.print("\n");
+  Serial.print(ver); 
+  Serial.print("\n");*/
+  for (int i = 0; (ver + i < y + 4 && ver + i <= 7) && (hor + i < x + 4 && hor + i <= 7); i++)
+  {
+    if (bitRead(arr[ver + i], 7 - (hor + i)))
+    {
+      wonToken[count][0] = ver + i;
+      wonToken[count][1] = hor + i;
+      count++;
+    }
+    else
+      count = 0;
+      
+    if (count == 4)
+      return true;
+  }
+  count = 0;
+
+  
+  ver =  y + 3 >= 7? 7 : (y + 3);
+  hor = x - 3 < 0? 0 : (x - 3);
+  Serial.print(hor);
+  Serial.print("\n");
+  Serial.print(ver); 
+  Serial.print("\n");
+  mindiff = ver - y <= x - hor? ver - y: x - hor;
+  hor = x - mindiff;
+  ver = y + mindiff;
+  Serial.print("\n");
+  Serial.print(hor);
+  Serial.print("\n");
+  Serial.print(ver); 
+  Serial.print("\n");
+  for (int i = 0; (ver - i > y - 4 && ver - i >= 0) && (hor + i < x + 4 && hor + i <= 7); i++)
+  {
+    if (bitRead(arr[ver - i], 7 - (hor + i)))
+    {
+      Serial.print(count);
+      wonToken[count][0] = ver - i;
+      wonToken[count][1] = hor + i; 
+      count++;
+    }
+    else
+      count = 0;
+
+    if (count == 4)
+      return true;
+  }
+
+  return false;
+}
+void setup()
+{
+  lcd.begin(16,2);
+  lcd.clear();
+  lcd.print("Player 1 turn");
+  pinMode(latchPin, OUTPUT);
+  pinMode(dataPin, OUTPUT);
+  pinMode(clockPin, OUTPUT);
+  pinMode(latchPin2, OUTPUT);
+  pinMode(dataPin2, OUTPUT);
+  pinMode(clockPin2, OUTPUT);
+  pinMode(buttonpin, INPUT_PULLUP);
+
+  sToken.countTime = 0;
+  sToken.blinkInterval = 1500;
+  sToken.lightUp = sToken.blinkInterval/2;
+  sToken.dropInterval = 100;
+  sToken.x = 0;
+  sToken.y = 0;
+  Serial.begin(9600);
+}
+
+
+void loop()
+{
+  
+  xValue = analogRead(joyX);
+  yValue = analogRead(joyY);
+
+  if (GameWon)
+    BlinkWin(sToken, millis());
+  else{
+    buttonState = !digitalRead(buttonpin);
+    if (buttonState == HIGH || !isPlaced)
+    {
+      CloseMatrixLed(sToken.x, sToken.y);
+      isPlaced = placeToken (sToken, millis());
+      if (isPlaced)
+      {
+        GameWon = isGameWon(sToken.x, sToken.y);
+        lcd.clear();
+        if (GameWon)
+        {
+            if (turn == P1)
+              lcd.print("Player 1 won");
+            else
+              lcd.print("Player 2 turn");
+        }
+        else{
+        sToken.y = 0;
+        sToken.x = 0;
+        turn = turn == P1? P2:P1;
+        if (turn == P1)
+          lcd.print("Player 1 turn");
+        else
+          lcd.print("Player 2 turn");
+        }
+      }
+    }
+    else
+    {
+      if (!MoveToken(xValue, sToken))
+        BlinkLights(sToken, millis());
+    }
+  }
+  
+}
+
+
+bool MoveToken(int xpos, Blink &token)
+{
+  if (isJoystick == true)
+  {
+    if (xpos > MoveRight || xpos < MoveLeft)
+    {
+      return false;
+    }
+    else 
+      isJoystick = false;
+  }
+  
+  if (xpos > MoveRight || xpos < MoveLeft)
+    isJoystick = true;
+    
+  if (xpos < MoveLeft && token.x > 0)
+  {
+    CloseMatrixLed(token.x, token.y);
+    token.x--;
+    return true;
+  }
+  if (xpos > MoveRight && token.x < 7)
+  {
+    CloseMatrixLed(token.x, token.y);
+    token.x++;
+    return true;
+  }
+  
+  return false;
+}
+bool placeToken (Blink &token, unsigned long currentTime)
+{
+  bool isPlaced = false;
+  if (token.y >= 7 || isOpen(token.x, token.y+1))
+  {
+    LightMatrixLed (token.x, token.y);
+    isPlaced = true;
+  }
+  DropBlink ( sToken, currentTime);
+  return isPlaced;
+}
+void DropBlink(Blink &token, unsigned long currentTime) {
+  if (currentTime - token.countTime > token.dropInterval)
+  {
+    token.countTime = currentTime;
+    token.y++;
+  }
+  if (currentTime - token.countTime < token.dropInterval/2)
+    LightMatrixLed (token.x, token.y);
+  else
+    CloseMatrixLed (token.x, token.y);
+}
+void BlinkLights (Blink &token, unsigned long currentTime)
+{
+  
+  if (currentTime - token.countTime > token.blinkInterval)
+    token.countTime = currentTime;
+
+  if (currentTime - token.countTime < token.lightUp)
+    LightMatrixLed (token.x, token.y);
+  else
+    CloseMatrixLed (token.x, token.y);
+}
+void BlinkWin(Blink &token, unsigned long currentTime)
+{
+  if (currentTime - token.countTime > token.blinkInterval)
+    token.countTime = currentTime;
+
+  if (currentTime - token.countTime < token.lightUp)
+  {
+    for (int i = 0;i < 4;i++)
+      LightMatrixLed (wonToken[i][1], wonToken[i][0]);
+  }
+  else
+  {
+    for (int i = 0;i < 4;i++)
+      CloseMatrixLed (wonToken[i][1], wonToken[i][0]);
+  }
+}
+void displayMatrix()
+{
+  for (int i = 0; i < 8; i++)
+  {
+    /*Serial.print(red[i]);
+    Serial.print("     ");
+    Serial.print(green[i]);
+    Serial.print("     ");
+    Serial.print(blue[i]);
+    Serial.print("\n");*/
+    
+    shiftOut(dataPin2, clockPin2, MSBFIRST, ~green[i]);
+    shiftOut(dataPin2, clockPin2, MSBFIRST, ~red[i]);
+    shiftOut(dataPin, clockPin, MSBFIRST, ~blue[i]);
+    shiftOut(dataPin, clockPin, MSBFIRST, 128 >> i);
+    store();
+  }
+  
+  //Serial.print("\n");
+}
+bool isOpen(int xpos, int ypos)
+{
+  return bitRead(red[ypos], 7-xpos) || bitRead(blue[ypos], 7-xpos) || bitRead(green[ypos], 7-xpos);   
+}
+void LightMatrixLed (int x, int y)
+{
+  if (turn == P1)
+    bitWrite(blue[y], 7 - x, 1);
+  else if (turn == P2)
+    bitWrite(red[y], 7 - x, 1);
+  displayMatrix();
+}
+void CloseMatrixLed (int x, int y)
+{
+  if (turn == P1)
+    bitWrite(blue[y], 7 - x, 0);
+  else if (turn == P2)
+    bitWrite(red[y], 7 - x, 0);
+  displayMatrix();
+}
+void store()
+{
+  digitalWrite(latchPin, HIGH);
+  digitalWrite(latchPin2, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(latchPin2, LOW);
+  digitalWrite(latchPin, LOW);
+  delayMicroseconds(10);
+}
